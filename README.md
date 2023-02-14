@@ -1,13 +1,3 @@
-# Sample Hardhat Project
+# Sudoswap x Abacus Integration :)
 
-This project demonstrates a basic Hardhat use case. It comes with a sample contract, a test for that contract, and a script that deploys that contract.
-
-Try running some of the following tasks:
-
-```shell
-npx hardhat help
-npx hardhat test
-REPORT_GAS=true npx hardhat test
-npx hardhat node
-npx hardhat run scripts/deploy.js
-```
+TLDR: This integration allows for anyone who decides to deposit an NFT in Sudo or borrow against one on Abacus to do both! Users will be able to splice their NFT so that the actual NFT LPs in Sudoswap, while ownership of the LP position is still held by the contract and can be borrowed against on Abacus as if it was the real NFT itself.
