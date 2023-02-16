@@ -18,7 +18,7 @@ import { ERC721 } from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import { IERC721 } from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-contract SudoNFT is ERC721, OwnableWithTransferCallback {
+contract SudoNft is ERC721, OwnableWithTransferCallback {
 
     ERC721 public collection;
     ILSSVMPairFactory public sudoFactory;
@@ -197,7 +197,7 @@ contract SudoNFT is ERC721, OwnableWithTransferCallback {
         uint256 _lpTokenId,
         uint256[] calldata _ids,
         uint256[] calldata _epoch
-    ) external poolOwnedByContract(_sudoPool) {
+    ) external {
         (, address spotPool,,,uint256 loanAmount,) = Lend(payable(_lendingContract)).loans(address(this), _lpTokenId);
         Vault vault = Vault(payable(spotPool));
         uint256 futurePayout = vault.getPayoutPerReservation(
