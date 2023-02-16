@@ -21,19 +21,22 @@ contract SudoNft is ERC721 {
     ILSSVMPairFactory public sudoFactory;
 
     mapping(address => Pairing) public pairing;
-    mapping(uint256 => NFTInfo) public NFT;
+    mapping(uint256 => NFTInfo) public replicaNFT;
+    mapping(uint256 => bool) public idExistence;
+    mapping(uint256 => uint256) public realToReplica;
 
     struct Pairing {
         bool active;
         address owner;
-        uint256 amountActive;
-        //helloworld
+        uint96 amountActive;
+        uint128 price;
     }
 
     struct NFTInfo {
         bool active;
         address owner;
         address sudoPool;
+        uint256 loanAmount;
     }
 
     modifier ownerCaller(address _pool) {
@@ -42,7 +45,7 @@ contract SudoNft is ERC721 {
     }
 
     modifier duplicateActive(uint256 _id) {
-        require(!NFT[_id].active);
+        require(!replicaNFT[_id].active);
         _;
     }
 
@@ -93,21 +96,17 @@ contract SudoNft is ERC721 {
         ERC721 _nft = ERC721(address(collection));
         for(uint256 i = 0; i < ids.length; i++) {
             collection.transferFrom(msg.sender, address(this), ids[i]);
-            collection.approve(address(sudoFactory), ids[i]);
             // Connect deposited NFTs to a pair nonce
-            NFT[ids[i]].owner = msg.sender;
+            replicaNFT[ids[i]].owner = msg.sender;
         }
+        collection.setApprovalForAll(address(sudoFactory), true);
         sudoFactory.depositNFTs(_nft, ids, recipient);
     }
 
     function withdrawNFT(
         address _pool,
         uint256[] calldata _ids
-    ) external {
-        for(uint256 i = 0; i < _ids.length; i++) {
-            require(!NFT[_ids[i]].active, "One of NFTs has live duplicate");
-            require(NFT[_ids[i]].owner == msg.sender, "Only the owner can withdraw");
-        }
+    ) external ownerCaller(_pool) poolActive(_pool) {
         LSSVMPair(_pool).withdrawERC721(collection, _ids);
     }
 
@@ -153,75 +152,88 @@ contract SudoNft is ERC721 {
         address _spotPool,
         address _sudoPool,
         uint256 _id,
+        uint256 _lpTokenId,
         uint256 _amount
     ) external {
         // Create reflection NFT
-        require(NFT[_id].owner == msg.sender);
-        require(ownerOf(_id) == address(0));
-        _mint(address(this), _id);
+        require(!idExistence[_lpTokenId], "LpIdAlreadyTaken");
+        if(ownerOf(_id) == address(0)) {
+            _mint(address(this), _lpTokenId);
+        }
         // amount must be 10% less than listing price
-        require(LSSVMPair(_sudoPool).spotPrice() >= 110 * _amount / 100);
+        uint256 currentPrice;
+        uint256 currentlyBorrowed;
+        if(pairing[_sudoPool].price == 0) {
+            (,,, currentPrice,) = LSSVMPair(_sudoPool).getBuyNFTQuote(1);
+            require(currentPrice < 2**128-1, "Price too high!");
+            pairing[_sudoPool].price = uint128(currentPrice);
+            pairing[_sudoPool].active = true;
+        } else {
+            currentPrice = pairing[_sudoPool].price;
+            (,,,, currentlyBorrowed,) = Lend(payable(_lendingContract)).loans(address(this), _lpTokenId);
+        }
+        require(currentPrice >= 110 * (_amount + currentlyBorrowed) / 100, "Listing price must be 10% greater than borrow amount");
         address currency = address(Vault(_spotPool).token());
-        pairing[_sudoPool].active = true;
         pairing[_sudoPool].amountActive++;
-        NFT[_id].active = true;
         // Execute borrow against LP position
-        ILend(_lendingContract).borrow(_merkleProof, _spotPool, address(this), _id, _amount);
-        require(IERC20(currency).transfer(msg.sender, _amount));        
+        Lend(payable(_lendingContract)).borrow(_merkleProof, _spotPool, address(this), _lpTokenId, _amount);
+        require(IERC20(currency).transfer(msg.sender, _amount), "Transfer failed");
     }
 
     function payInterest(
         address _lendingContract,
         uint256[] calldata _epoch,
-        uint256 _id
+        uint256 _lpTokenId
     ) external {
         // Basic pay interest transitory
         // Calculate interest cost 
-        uint256 amount = ILend(_lendingContract).getInterestPayment(_epoch, address(this), _id);
+        uint256 amount = Lend(payable(_lendingContract)).getInterestPayment(_epoch, address(this), _lpTokenId);
         // Approve lending contract to take that amount
-        (,address spotPool,,,,) = Lend(payable(_lendingContract)).loans(address(this), _id);
+        (,address spotPool,,,,) = Lend(payable(_lendingContract)).loans(address(this), _lpTokenId);
         address currency = address(Vault(spotPool).token());
         IERC20(currency).approve(_lendingContract, amount);
         // Call pay interest 
-        ILend(_lendingContract).payInterest(_epoch, address(this), _id);
+        Lend(payable(_lendingContract)).payInterest(_epoch, address(this), _lpTokenId);
     }
 
     function repay(
         address _lendingContract,
-        uint256 _id, 
+        address _sudoPool,
+        uint256 _lpTokenId,
         uint256 _amount
     ) external {
+        require(msg.sender == pairing[_sudoPool].owner, "Not pool owner!");
         // Basic repay transitory
         // Approve lending contract to take that amount
-        address sudoPool = collection.ownerOf(_id);
-        (,address spotPool,,,,) = Lend(payable(_lendingContract)).loans(address(this), _id);
+        (,address spotPool,,,,) = Lend(payable(_lendingContract)).loans(address(this), _lpTokenId);
         address currency = address(Vault(spotPool).token());
         IERC20(currency).approve(_lendingContract, _amount);
         // Call pay interest 
-        ILend(_lendingContract).repay(address(this), _id, _amount);
-        (, spotPool,,,,) = Lend(payable(_lendingContract)).loans(address(this), _id);
+        Lend(payable(_lendingContract)).repay(address(this), _lpTokenId, _amount);
+        (, spotPool,,,,) = Lend(payable(_lendingContract)).loans(address(this), _lpTokenId);
         if(spotPool == address(0)) {
-            pairing[sudoPool].amountActive--;
-            NFT[_id].active = false;
-            _burn(_id);
+            pairing[_sudoPool].amountActive--;
+            _burn(_lpTokenId);
         }
-        if(pairing[sudoPool].amountActive == 0) {
-            pairing[sudoPool].active = false;
+        if(pairing[_sudoPool].amountActive == 0) {
+            pairing[_sudoPool].active = false;
+            delete pairing[_sudoPool].price;
         }
     }
 
     function liquidateLp(
+        address _sudoPool,
         address _lendingContract,
+        uint256 _lpTokenId,
         uint256[] calldata _ids,
         uint256[] calldata _epoch
     ) external {
-        uint256 _id = _ids[0];
-        (, address spotPool,,,uint256 loanAmount,) = Lend(payable(_lendingContract)).loans(address(this), _id);
+        (, address spotPool,,,uint256 loanAmount,) = Lend(payable(_lendingContract)).loans(address(this), _lpTokenId);
         Vault vault = Vault(payable(spotPool));
-        address sudoPool = NFT[_id].sudoPool;
-        uint256 futureEpoch = (block.timestamp - vault.startTime() + vault.epochLength() / 6 + 4 hours) / vault.epochLength();
-        uint256 futurePayout = vault.getPayoutPerReservation(futureEpoch);
-        uint256 outstandingInterest = ILend(_lendingContract).getInterestPayment(_epoch, address(this), _id);
+        uint256 futurePayout = vault.getPayoutPerReservation(
+            (block.timestamp - vault.startTime() + vault.epochLength() / 6 + 4 hours) / vault.epochLength()
+        );
+        uint256 outstandingInterest = Lend(payable(_lendingContract)).getInterestPayment(_epoch, address(this), _lpTokenId);
         // contract checks borrow position on lending contract 
             // if within LP liquidation window + base liquidation window, can liquidate
             // else revert
@@ -233,18 +245,14 @@ contract SudoNft is ERC721 {
             vault.token().transferFrom(msg.sender, address(this), loanAmount + outstandingInterest);
             vault.token().approve(_lendingContract, outstandingInterest);
             // Call pay interest 
-            ILend(_lendingContract).payInterest(_epoch, address(this), _id);
+            Lend(payable(_lendingContract)).payInterest(_epoch, address(this), _lpTokenId);
             vault.token().approve(_lendingContract, loanAmount);
             // Call pay interest 
-            ILend(_lendingContract).repay(address(this), _id, loanAmount);
-            (, spotPool,,,,) = Lend(payable(_lendingContract)).loans(address(this), _id);
+            Lend(payable(_lendingContract)).repay(address(this), _lpTokenId, loanAmount);
+            (, spotPool,,,,) = Lend(payable(_lendingContract)).loans(address(this), _lpTokenId);
             if(spotPool == address(0)) {
-                pairing[sudoPool].amountActive--;
-                NFT[_id].active = false;
-                _burn(_id);
-            }
-            if(pairing[sudoPool].amountActive == 0) {
-                pairing[sudoPool].active = false;
+                pairing[_sudoPool].amountActive--;
+                _burn(_lpTokenId);
             }
         } else {
             revert("Liquidation failed");
@@ -252,12 +260,17 @@ contract SudoNft is ERC721 {
         // LP NFT destroyed
             // if NFT is in pool, liquidator receives NFT
             // else liquidator receives spot price worth of ETH
-        if(collection.ownerOf(_id) == sudoPool) {
-            LSSVMPair(sudoPool).withdrawERC721(collection, _ids);
-            collection.transferFrom(address(this), msg.sender, _id);
+        uint256 ETHpayout = pairing[_sudoPool].price;
+        if(collection.ownerOf(_ids[0]) == _sudoPool) {
+            LSSVMPair(_sudoPool).withdrawERC721(collection, _ids);
+            collection.transferFrom(address(this), msg.sender, _ids[0]);
         } else {
-            LSSVMPairETH(payable(sudoPool)).withdrawETH(LSSVMPair(payable(sudoPool)).spotPrice());
-            payable(msg.sender).transfer(LSSVMPair(payable(sudoPool)).spotPrice());
+            LSSVMPairETH(payable(_sudoPool)).withdrawETH(ETHpayout);
+            payable(msg.sender).transfer(ETHpayout);
+        }
+        if(pairing[_sudoPool].amountActive == 0) {
+            pairing[_sudoPool].active = false;
+            delete pairing[_sudoPool].price;
         }
     }
 }
