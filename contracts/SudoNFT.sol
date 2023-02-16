@@ -3,19 +3,22 @@ pragma solidity ^0.8.0;
 
 import { LSSVMPair } from "./sudoHelpers/LSSVMPair.sol";
 import { LSSVMPairETH } from "./sudoHelpers/LSSVMPairETH.sol";
+import { OwnableWithTransferCallback } from "./sudoHelpers/OwnableWithTransferCallback.sol";
 import { Vault } from "./abacusHelpers/Vault.sol";
 import { Lend } from "./abacusHelpers/Lend.sol";
 
 import { IVault } from "./abacusInterfaces/IVault.sol";
 import { ILend } from "./abacusInterfaces/ILend.sol";
 import { ILSSVMPairFactory } from "./sudoInterfaces/ILSSVMPairFactory.sol";
+import { ILSSVMPairFactoryLike } from "./sudoInterfaces/ILSSVMPairFactoryLike.sol";
 import { ICurve } from "./sudoInterfaces/ICurve.sol";
+import { IOwnershipTransferCallback } from "./sudoInterfaces/IOwnershipTransferCallback.sol";
 
 import { ERC721 } from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import { IERC721 } from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-contract SudoNft is ERC721 {
+contract SudoNFT is ERC721, OwnableWithTransferCallback {
 
     ERC721 public collection;
     ILSSVMPairFactory public sudoFactory;
@@ -31,13 +34,18 @@ contract SudoNft is ERC721 {
         uint128 price;
     }
 
+    modifier poolOwnedByContract(address _pool) {
+        require(pairing[_pool].active);
+        _;
+    }
+
     modifier ownerCaller(address _pool) {
         require(msg.sender == pairing[_pool].owner);
         _;
     }
 
     modifier poolActive(address _pool) {
-        require(!pairing[_pool].active);
+        require(pairing[_pool].amountActive == 0);
         _;
     }
 
@@ -51,36 +59,10 @@ contract SudoNft is ERC721 {
         totalSupply = _totalSupply;
     }
 
-    function createPairEth(
-        IERC721 _nft,
-        ICurve _bondingCurve,
-        address payable _assetRecipient,
-        LSSVMPair.PoolType _poolType,
-        uint128 _delta,
-        uint96 _fee,
-        uint128 _spotPrice,
-        uint256[] calldata _initialNFTIDs
-    ) external {
-        // LSSVMPairFactory.createPairETH
-        LSSVMPairETH newPool = sudoFactory.createPairETH(
-            _nft, 
-            _bondingCurve, 
-            _assetRecipient, 
-            _poolType, 
-            _delta,
-            _fee, 
-            _spotPrice, 
-            _initialNFTIDs
-        );
-
-        // Track pool owner
-        pairing[address(newPool)].owner = msg.sender;
-    }
-
     function depositNFTs(
         uint256[] calldata ids,
         address recipient
-    ) external {
+    ) external poolOwnedByContract(recipient) {
         // LSSVMPairFactory.depositNFTs
         ERC721 _nft = ERC721(address(collection));
         for(uint256 i = 0; i < ids.length; i++) {
@@ -93,14 +75,14 @@ contract SudoNft is ERC721 {
     function withdrawNFT(
         address _pool,
         uint256[] calldata _ids
-    ) external ownerCaller(_pool) poolActive(_pool) {
+    ) external ownerCaller(_pool) poolActive(_pool) poolOwnedByContract(_pool) {
         LSSVMPair(_pool).withdrawERC721(collection, _ids);
     }
 
     function withdrawETH(
         address _pool,
         uint256 _amount
-    ) external ownerCaller(_pool) {
+    ) external ownerCaller(_pool) poolOwnedByContract(_pool) {
         require(!pairing[_pool].active, "There is a duplicate active within this pool.");
         LSSVMPairETH(payable(_pool)).withdrawETH(_amount);
     }
@@ -108,28 +90,28 @@ contract SudoNft is ERC721 {
     function changeSpotPrice(
         address _pool,
         uint128 newSpotPrice
-    ) external ownerCaller(_pool) poolActive(_pool) {
+    ) external ownerCaller(_pool) poolActive(_pool) poolOwnedByContract(_pool) {
         LSSVMPair(_pool).changeSpotPrice(newSpotPrice);
     }
 
     function changeDelta(
         address _pool,
         uint128 newDelta
-    ) external ownerCaller(_pool) poolActive(_pool) {
+    ) external ownerCaller(_pool) poolActive(_pool) poolOwnedByContract(_pool) {
         LSSVMPair(_pool).changeDelta(newDelta);
     }
 
     function changeFee(
         address _pool,
         uint96 newFee
-    ) external ownerCaller(_pool) poolActive(_pool) {
+    ) external ownerCaller(_pool) poolActive(_pool) poolOwnedByContract(_pool) {
         LSSVMPair(_pool).changeFee(newFee);
     }
 
     function changeAssetRecipient(
         address _pool,
         address payable newRecipient
-    ) external ownerCaller(_pool) poolActive(_pool) {
+    ) external ownerCaller(_pool) poolActive(_pool) poolOwnedByContract(_pool) {
         LSSVMPair(_pool).changeAssetRecipient(newRecipient);
     }
 
@@ -141,7 +123,7 @@ contract SudoNft is ERC721 {
         uint256 _id,
         uint256 _lpTokenId,
         uint256 _amount
-    ) external {
+    ) external poolOwnedByContract(_sudoPool) {
         // Create reflection NFT
         require(_lpTokenId < totalSupply);
         require(!idExistence[_lpTokenId], "LpIdAlreadyTaken");
@@ -189,7 +171,7 @@ contract SudoNft is ERC721 {
         address _sudoPool,
         uint256 _lpTokenId,
         uint256 _amount
-    ) external {
+    ) external poolOwnedByContract(_sudoPool) {
         require(msg.sender == pairing[_sudoPool].owner, "Not pool owner!");
         // Basic repay transitory
         // Approve lending contract to take that amount
@@ -215,7 +197,7 @@ contract SudoNft is ERC721 {
         uint256 _lpTokenId,
         uint256[] calldata _ids,
         uint256[] calldata _epoch
-    ) external {
+    ) external poolOwnedByContract(_sudoPool) {
         (, address spotPool,,,uint256 loanAmount,) = Lend(payable(_lendingContract)).loans(address(this), _lpTokenId);
         Vault vault = Vault(payable(spotPool));
         uint256 futurePayout = vault.getPayoutPerReservation(
@@ -260,5 +242,11 @@ contract SudoNft is ERC721 {
             pairing[_sudoPool].active = false;
             delete pairing[_sudoPool].price;
         }
+    }
+
+    function onOwnershipTransfer(address oldOwner) external {
+        require(ILSSVMPairFactoryLike(address(sudoFactory)).isPair(msg.sender, LSSVMPair(msg.sender).pairVariant()), "FAKER!!!");
+        require(owner() == address(this));
+        pairing[msg.sender].active = true;
     }
 }
