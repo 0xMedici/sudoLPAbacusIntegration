@@ -248,5 +248,6 @@ contract SudoNft is ERC721, OwnableWithTransferCallback {
         require(ILSSVMPairFactoryLike(address(sudoFactory)).isPair(msg.sender, LSSVMPair(msg.sender).pairVariant()), "FAKER!!!");
         require(owner() == address(this));
         pairing[msg.sender].active = true;
+        pairing[msg.sender].owner = oldOwner;
     }
 }
