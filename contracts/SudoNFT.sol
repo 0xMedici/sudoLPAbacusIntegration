@@ -247,6 +247,11 @@ contract SudoNft is ERC721, OwnableWithTransferCallback {
     function onOwnershipTransfer(address oldOwner) external {
         require(ILSSVMPairFactoryLike(address(sudoFactory)).isPair(msg.sender, LSSVMPair(msg.sender).pairVariant()), "FAKER!!!");
         require(owner() == address(this));
+        require(
+            LSSVMPair(msg.sender).poolType() == LSSVMPair.PoolType.NFT
+            || LSSVMPair(msg.sender).poolType() == LSSVMPair.PoolType.TRADE
+            , "Improper pool type"
+        );
         pairing[msg.sender].active = true;
         pairing[msg.sender].owner = oldOwner;
     }
