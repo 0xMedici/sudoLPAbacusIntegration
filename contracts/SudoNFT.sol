@@ -19,11 +19,10 @@ contract SudoNft is ERC721 {
 
     ERC721 public collection;
     ILSSVMPairFactory public sudoFactory;
+    uint256 public totalSupply;
 
     mapping(address => Pairing) public pairing;
-    mapping(uint256 => NFTInfo) public replicaNFT;
     mapping(uint256 => bool) public idExistence;
-    mapping(uint256 => uint256) public realToReplica;
 
     struct Pairing {
         bool active;
@@ -32,20 +31,8 @@ contract SudoNft is ERC721 {
         uint128 price;
     }
 
-    struct NFTInfo {
-        bool active;
-        address owner;
-        address sudoPool;
-        uint256 loanAmount;
-    }
-
     modifier ownerCaller(address _pool) {
         require(msg.sender == pairing[_pool].owner);
-        _;
-    }
-
-    modifier duplicateActive(uint256 _id) {
-        require(!replicaNFT[_id].active);
         _;
     }
 
@@ -56,10 +43,12 @@ contract SudoNft is ERC721 {
 
     constructor(
         address _factoryAddress,
-        address _collection
+        address _collection,
+        uint256 _totalSupply
     ) ERC721(ERC721(_collection).name(), ERC721(_collection).symbol()) {
         sudoFactory = ILSSVMPairFactory(_factoryAddress);
         collection = ERC721(_collection);
+        totalSupply = _totalSupply;
     }
 
     function createPairEth(
@@ -96,8 +85,6 @@ contract SudoNft is ERC721 {
         ERC721 _nft = ERC721(address(collection));
         for(uint256 i = 0; i < ids.length; i++) {
             collection.transferFrom(msg.sender, address(this), ids[i]);
-            // Connect deposited NFTs to a pair nonce
-            replicaNFT[ids[i]].owner = msg.sender;
         }
         collection.setApprovalForAll(address(sudoFactory), true);
         sudoFactory.depositNFTs(_nft, ids, recipient);
@@ -156,6 +143,7 @@ contract SudoNft is ERC721 {
         uint256 _amount
     ) external {
         // Create reflection NFT
+        require(_lpTokenId < totalSupply);
         require(!idExistence[_lpTokenId], "LpIdAlreadyTaken");
         if(ownerOf(_id) == address(0)) {
             _mint(address(this), _lpTokenId);
