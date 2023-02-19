@@ -16,15 +16,21 @@ import { IOwnershipTransferCallback } from "./sudoInterfaces/IOwnershipTransferC
 
 import { ERC721 } from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import { IERC721 } from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
-import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
-contract SudoNft is ERC721, OwnableWithTransferCallback {
+contract SudoNft is ERC721 {
 
     ERC721 public collection;
     ILSSVMPairFactory public sudoFactory;
+
+    // address public admin = recovery address that we decide to use
+    address public admin;
+
     uint256 public totalSupply;
+    uint256 public testVar;
 
     mapping(address => Pairing) public pairing;
+    mapping(uint256 => address) public borrower;
     mapping(uint256 => bool) public idExistence;
 
     struct Pairing {
@@ -35,84 +41,49 @@ contract SudoNft is ERC721, OwnableWithTransferCallback {
     }
 
     modifier poolOwnedByContract(address _pool) {
-        require(pairing[_pool].active);
+        require(
+            pairing[_pool].active 
+            && LSSVMPair(_pool).owner() == address(this)
+            , "Pool not owned by contract"
+        );
         _;
     }
 
     modifier ownerCaller(address _pool) {
-        require(msg.sender == pairing[_pool].owner);
+        require(
+            msg.sender == pairing[_pool].owner
+            , "Improper caller (ownerCaller)"
+        );
         _;
     }
 
     modifier poolActive(address _pool) {
-        require(pairing[_pool].amountActive == 0);
+        require(
+            pairing[_pool].amountActive == 0
+            , "Pool is currently active"
+        );
         _;
     }
 
+    event CallbackTriggered(address _caller);
+
     constructor(
+        address _admin,
         address _factoryAddress,
         address _collection,
         uint256 _totalSupply
     ) ERC721(ERC721(_collection).name(), ERC721(_collection).symbol()) {
+        admin = _admin;
         sudoFactory = ILSSVMPairFactory(_factoryAddress);
         collection = ERC721(_collection);
         totalSupply = _totalSupply;
     }
 
-    function depositNFTs(
-        uint256[] calldata ids,
-        address recipient
-    ) external poolOwnedByContract(recipient) {
-        // LSSVMPairFactory.depositNFTs
-        ERC721 _nft = ERC721(address(collection));
-        for(uint256 i = 0; i < ids.length; i++) {
-            collection.transferFrom(msg.sender, address(this), ids[i]);
-        }
-        collection.setApprovalForAll(address(sudoFactory), true);
-        sudoFactory.depositNFTs(_nft, ids, recipient);
-    }
-
-    function withdrawNFT(
-        address _pool,
-        uint256[] calldata _ids
-    ) external ownerCaller(_pool) poolActive(_pool) poolOwnedByContract(_pool) {
-        LSSVMPair(_pool).withdrawERC721(collection, _ids);
-    }
-
-    function withdrawETH(
-        address _pool,
-        uint256 _amount
-    ) external ownerCaller(_pool) poolOwnedByContract(_pool) {
-        require(!pairing[_pool].active, "There is a duplicate active within this pool.");
-        LSSVMPairETH(payable(_pool)).withdrawETH(_amount);
-    }
-
-    function changeSpotPrice(
-        address _pool,
-        uint128 newSpotPrice
-    ) external ownerCaller(_pool) poolActive(_pool) poolOwnedByContract(_pool) {
-        LSSVMPair(_pool).changeSpotPrice(newSpotPrice);
-    }
-
-    function changeDelta(
-        address _pool,
-        uint128 newDelta
-    ) external ownerCaller(_pool) poolActive(_pool) poolOwnedByContract(_pool) {
-        LSSVMPair(_pool).changeDelta(newDelta);
-    }
-
-    function changeFee(
-        address _pool,
-        uint96 newFee
-    ) external ownerCaller(_pool) poolActive(_pool) poolOwnedByContract(_pool) {
-        LSSVMPair(_pool).changeFee(newFee);
-    }
-
-    function changeAssetRecipient(
-        address _pool,
-        address payable newRecipient
-    ) external ownerCaller(_pool) poolActive(_pool) poolOwnedByContract(_pool) {
-        LSSVMPair(_pool).changeAssetRecipient(newRecipient);
+    function initiatePool(address _sudoPool) external {
+        require(msg.sender == LSSVMPair(_sudoPool).owner());
+        require(pairing[_sudoPool].active == false);
+        pairing[_sudoPool].active = true;
+        pairing[_sudoPool].owner = msg.sender;
     }
 
     function borrow(
@@ -120,15 +91,17 @@ contract SudoNft is ERC721, OwnableWithTransferCallback {
         bytes32[] calldata _merkleProof, 
         address _spotPool,
         address _sudoPool,
-        uint256 _id,
         uint256 _lpTokenId,
         uint256 _amount
     ) external poolOwnedByContract(_sudoPool) {
         // Create reflection NFT
-        require(_lpTokenId < totalSupply);
+        require(_lpTokenId < totalSupply, "Improper token id input");
         require(!idExistence[_lpTokenId], "LpIdAlreadyTaken");
-        if(ownerOf(_id) == address(0)) {
+        if(!_exists(_lpTokenId)) {
             _mint(address(this), _lpTokenId);
+            pairing[_sudoPool].amountActive++;
+        } else {
+            require(borrower[_lpTokenId] == msg.sender, "No soup for you!");
         }
         // amount must be 10% less than listing price
         uint256 currentPrice;
@@ -142,12 +115,25 @@ contract SudoNft is ERC721, OwnableWithTransferCallback {
             currentPrice = pairing[_sudoPool].price;
             (,,,, currentlyBorrowed,) = Lend(payable(_lendingContract)).loans(address(this), _lpTokenId);
         }
-        require(currentPrice >= 110 * (_amount + currentlyBorrowed) / 100, "Listing price must be 10% greater than borrow amount");
+        require(
+            currentPrice >= 110 * (_amount + currentlyBorrowed) / 100
+            , "Listing price must be 10% greater than borrow amount"
+        );
         address currency = address(Vault(_spotPool).token());
-        pairing[_sudoPool].amountActive++;
+        require(
+            collection.balanceOf(_sudoPool) >= pairing[_sudoPool].amountActive
+            , "Not enough NFTs in the sudo pool to allow this!"
+        );
         // Execute borrow against LP position
-        Lend(payable(_lendingContract)).borrow(_merkleProof, _spotPool, address(this), _lpTokenId, _amount);
-        require(IERC20(currency).transfer(msg.sender, _amount), "Transfer failed");
+        _approve(_lendingContract, _lpTokenId);
+        Lend(payable(_lendingContract)).borrow(
+            _merkleProof,
+            _spotPool,
+            address(this),
+            _lpTokenId,
+            _amount
+        );
+        require(ERC20(currency).transfer(msg.sender, _amount), "Transfer failed");
     }
 
     function payInterest(
@@ -161,7 +147,7 @@ contract SudoNft is ERC721, OwnableWithTransferCallback {
         // Approve lending contract to take that amount
         (,address spotPool,,,,) = Lend(payable(_lendingContract)).loans(address(this), _lpTokenId);
         address currency = address(Vault(spotPool).token());
-        IERC20(currency).approve(_lendingContract, amount);
+        ERC20(currency).approve(_lendingContract, amount);
         // Call pay interest 
         Lend(payable(_lendingContract)).payInterest(_epoch, address(this), _lpTokenId);
     }
@@ -175,10 +161,20 @@ contract SudoNft is ERC721, OwnableWithTransferCallback {
         require(msg.sender == pairing[_sudoPool].owner, "Not pool owner!");
         // Basic repay transitory
         // Approve lending contract to take that amount
-        (,address spotPool,,,,) = Lend(payable(_lendingContract)).loans(address(this), _lpTokenId);
+        (,address spotPool,,,,uint256 interestEpoch) = Lend(payable(_lendingContract)).loans(address(this), _lpTokenId);
         address currency = address(Vault(spotPool).token());
-        IERC20(currency).approve(_lendingContract, _amount);
-        // Call pay interest 
+        Vault vault = Vault(spotPool);
+        uint256 poolEpoch = (block.timestamp - vault.startTime()) / vault.epochLength();
+        uint256 finalInterestPayment;
+        if(poolEpoch == interestEpoch) {
+            finalInterestPayment = vault.interestRate() * vault.getPayoutPerReservation(poolEpoch) / 10_000 
+                        * vault.epochLength() / (52 weeks);
+        } else {
+            require(poolEpoch + 1 == interestEpoch, "Must pay outstanding interest");
+        }
+        ERC20(currency).transferFrom(msg.sender, address(this), _amount + finalInterestPayment);
+        ERC20(currency).approve(_lendingContract, _amount + finalInterestPayment);
+        // Call repay
         Lend(payable(_lendingContract)).repay(address(this), _lpTokenId, _amount);
         (, spotPool,,,,) = Lend(payable(_lendingContract)).loans(address(this), _lpTokenId);
         if(spotPool == address(0)) {
@@ -186,7 +182,6 @@ contract SudoNft is ERC721, OwnableWithTransferCallback {
             _burn(_lpTokenId);
         }
         if(pairing[_sudoPool].amountActive == 0) {
-            pairing[_sudoPool].active = false;
             delete pairing[_sudoPool].price;
         }
     }
@@ -217,7 +212,7 @@ contract SudoNft is ERC721, OwnableWithTransferCallback {
             // Call pay interest 
             Lend(payable(_lendingContract)).payInterest(_epoch, address(this), _lpTokenId);
             vault.token().approve(_lendingContract, loanAmount);
-            // Call pay interest 
+            // Call repay
             Lend(payable(_lendingContract)).repay(address(this), _lpTokenId, loanAmount);
             (, spotPool,,,,) = Lend(payable(_lendingContract)).loans(address(this), _lpTokenId);
             if(spotPool == address(0)) {
@@ -239,20 +234,21 @@ contract SudoNft is ERC721, OwnableWithTransferCallback {
             payable(msg.sender).transfer(ETHpayout);
         }
         if(pairing[_sudoPool].amountActive == 0) {
-            pairing[_sudoPool].active = false;
             delete pairing[_sudoPool].price;
         }
     }
 
-    function onOwnershipTransfer(address oldOwner) external {
-        require(ILSSVMPairFactoryLike(address(sudoFactory)).isPair(msg.sender, LSSVMPair(msg.sender).pairVariant()), "FAKER!!!");
-        require(owner() == address(this));
-        require(
-            LSSVMPair(msg.sender).poolType() == LSSVMPair.PoolType.NFT
-            || LSSVMPair(msg.sender).poolType() == LSSVMPair.PoolType.TRADE
-            , "Improper pool type"
-        );
-        pairing[msg.sender].active = true;
-        pairing[msg.sender].owner = oldOwner;
+    function callTransferOwnership(address _sudoPool) external poolActive(_sudoPool) {
+        address owner = pairing[_sudoPool].owner;
+        delete pairing[_sudoPool];
+        if(
+            owner == address(0)
+            && LSSVMPair(_sudoPool).owner() == address(this)
+        ) {
+            require(msg.sender == admin);
+        } else {
+            require(msg.sender == owner);    
+        }
+        LSSVMPair(_sudoPool).transferOwnership(owner);
     }
 }
