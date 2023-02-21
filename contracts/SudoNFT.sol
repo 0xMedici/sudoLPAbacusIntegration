@@ -4,6 +4,7 @@ pragma solidity ^0.8.0;
 import { LSSVMPair } from "./sudoHelpers/LSSVMPair.sol";
 import { LSSVMPairETH } from "./sudoHelpers/LSSVMPairETH.sol";
 import { LSSVMPairEnumerableETH } from "./sudoHelpers/LSSVMPairEnumerableETH.sol";
+import { LSSVMPairFactory } from "./sudoHelpers/LSSVMPairFactory.sol";
 import { OwnableWithTransferCallback } from "./sudoHelpers/OwnableWithTransferCallback.sol";
 import { Vault } from "./abacusHelpers/Vault.sol";
 import { Lend } from "./abacusHelpers/Lend.sol";
@@ -22,7 +23,7 @@ import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 contract SudoNft is ERC721 {
 
     ERC721 public collection;
-    ILSSVMPairFactory public sudoFactory;
+    LSSVMPairFactory public sudoFactory;
 
     // address public admin = recovery address that we decide to use
     address public admin;
@@ -77,7 +78,7 @@ contract SudoNft is ERC721 {
         uint256 _totalSupply
     ) ERC721(ERC721(_collection).name(), ERC721(_collection).symbol()) {
         admin = _admin;
-        sudoFactory = ILSSVMPairFactory(_factoryAddress);
+        sudoFactory = LSSVMPairFactory(payable(_factoryAddress));
         collection = ERC721(_collection);
         totalSupply = _totalSupply;
     }
@@ -88,6 +89,7 @@ contract SudoNft is ERC721 {
     function initiatePool(address _sudoPool) external {
         require(msg.sender == LSSVMPair(_sudoPool).owner());
         require(pairing[_sudoPool].active == false);
+        require(sudoFactory.isPair(_sudoPool, LSSVMPair(_sudoPool).pairVariant()));
         pairing[_sudoPool].active = true;
         pairing[_sudoPool].owner = msg.sender;
     }
