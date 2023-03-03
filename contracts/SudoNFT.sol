@@ -8,6 +8,7 @@ import { LSSVMPairFactory } from "./sudoHelpers/LSSVMPairFactory.sol";
 import { OwnableWithTransferCallback } from "./sudoHelpers/OwnableWithTransferCallback.sol";
 import { Vault } from "./abacusHelpers/Vault.sol";
 import { Lend } from "./abacusHelpers/Lend.sol";
+import { AbacusController } from "./abacusHelpers/AbacusController.sol";
 
 import { IVault } from "./abacusInterfaces/IVault.sol";
 import { ILend } from "./abacusInterfaces/ILend.sol";
@@ -24,6 +25,7 @@ contract SudoNft is ERC721 {
 
     ERC721 public collection;
     LSSVMPairFactory public sudoFactory;
+    AbacusController public controller;
 
     // address public admin = recovery address that we decide to use
     address public admin;
@@ -32,7 +34,6 @@ contract SudoNft is ERC721 {
     uint256 public testVar;
 
     mapping(address => Pairing) public pairing;
-    mapping(uint256 => address) public lendingLocation;
     mapping(uint256 => address) public nftLocation;
     mapping(uint256 => address) public borrower;
     mapping(uint256 => bool) public idExistence;
@@ -69,15 +70,23 @@ contract SudoNft is ERC721 {
         _;
     }
 
-    event CallbackTriggered(address _caller);
+    event TransferInitiated(address _from, address _pool);
+    event Borrowed(address _from, address _spotPool, address _sudoPool, uint256[] _tokenIds, uint256[] _amounts);
+    event InterestPaid(address _from, uint256[] _tokenIds);
+    event Repaid(address _from, uint256[] _tokenIds, uint256[] _amounts);
+    event Liquidated(address _from, uint256[] _tokenIds);
+    event LPForNFT(address _from, uint256[] _tokenIds);
+    event LPForETH(address _from, uint256[] _tokenIds);
 
     constructor(
         address _admin,
+        address _abacusController,
         address _factoryAddress,
         address _collection,
         uint256 _totalSupply
     ) ERC721(ERC721(_collection).name(), ERC721(_collection).symbol()) {
         admin = _admin;
+        controller = AbacusController(_abacusController);
         sudoFactory = LSSVMPairFactory(payable(_factoryAddress));
         collection = ERC721(_collection);
         totalSupply = _totalSupply;
@@ -92,198 +101,194 @@ contract SudoNft is ERC721 {
         require(sudoFactory.isPair(_sudoPool, LSSVMPair(_sudoPool).pairVariant()));
         pairing[_sudoPool].active = true;
         pairing[_sudoPool].owner = msg.sender;
+        emit TransferInitiated(msg.sender, _sudoPool);
     }
 
     function borrow(
-        address _lendingContract,
-        bytes32[] calldata _merkleProof, 
         address _spotPool,
         address _sudoPool,
-        uint256 _lpTokenId,
-        uint256 _amount
-    ) external poolOwnedByContract(_sudoPool) {
-        // Create reflection NFT
-        require(_lpTokenId < totalSupply, "Improper token id input");
-        require(!idExistence[_lpTokenId], "LpIdAlreadyTaken");
-        if(!_exists(_lpTokenId)) {
-            _mint(address(this), _lpTokenId);
-            pairing[_sudoPool].amountActive++;
-            nftLocation[_lpTokenId] = _sudoPool;
-            lendingLocation[_lpTokenId] = _lendingContract;
-        } else {
-            require(borrower[_lpTokenId] == msg.sender, "No soup for you!");
-        }
-        // amount must be 10% less than listing price
-        uint256 currentPrice;
-        uint256 currentlyBorrowed;
-        if(pairing[_sudoPool].price == 0) {
-            (,,, currentPrice,) = LSSVMPair(_sudoPool).getBuyNFTQuote(1);
-            require(currentPrice < 2**128-1, "Price too high!");
-            pairing[_sudoPool].price = uint128(currentPrice);
-            pairing[_sudoPool].active = true;
-        } else {
-            currentPrice = pairing[_sudoPool].price;
-            (,,,, currentlyBorrowed,) = Lend(payable(_lendingContract)).loans(address(this), _lpTokenId);
-        }
-        require(
-            currentPrice >= 110 * (_amount + currentlyBorrowed) / 100
-            , "Listing price must be 10% greater than borrow amount"
+        bytes32[][] calldata _merkleProofs,
+        address[] calldata _addresses,
+        uint256[] calldata _lpTokenIds,
+        uint256[] calldata _amounts
+    ) external poolOwnedByContract(_sudoPool) ownerCaller(_sudoPool) {
+        require(controller.accreditedAddresses(_spotPool), "Not an accredited pool");
+        uint256 currentPrice = _findCurrentPrice(_sudoPool);
+        (uint256 totalBorrowAmount, ) = _checkLPIds(
+            msg.sender,
+            _sudoPool,
+            currentPrice,
+            _lpTokenIds,
+            _amounts
         );
-        address currency = address(Vault(_spotPool).token());
-        require(
-            collection.balanceOf(_sudoPool) >= pairing[_sudoPool].amountActive
-            , "Not enough NFTs in the sudo pool to allow this!"
-        );
-        // Execute borrow against LP position
-        _approve(_lendingContract, _lpTokenId);
-        Lend(payable(_lendingContract)).borrow(
-            _merkleProof,
+        setApprovalForAll(controller.lender(), true);
+        Lend(payable(controller.lender())).borrow(
             _spotPool,
-            address(this),
-            _lpTokenId,
-            _amount
+            _merkleProofs,
+            _addresses,
+            _lpTokenIds,
+            _amounts
         );
-        require(ERC20(currency).transfer(msg.sender, _amount), "Transfer failed");
+        require(Vault(_spotPool).token().transfer(msg.sender, totalBorrowAmount), "Transfer failed");
+        emit Borrowed(msg.sender, _spotPool, _sudoPool, _lpTokenIds, _amounts);
     }
 
     function payInterest(
-        address _lendingContract,
-        uint256[] calldata _epoch,
-        uint256 _lpTokenId
+        address _spotPool,
+        address[] calldata _addresses,
+        uint256[] calldata _lpTokenIds
     ) external {
-        // Basic pay interest transitory
-        // Calculate interest cost 
-        uint256 amount = Lend(payable(_lendingContract)).getInterestPayment(_epoch, address(this), _lpTokenId);
-        // Approve lending contract to take that amount
-        (,address spotPool,,,,) = Lend(payable(_lendingContract)).loans(address(this), _lpTokenId);
-        address currency = address(Vault(spotPool).token());
-        ERC20(currency).transferFrom(msg.sender, address(this), amount);
-        ERC20(currency).approve(_lendingContract, amount);
-        // Call pay interest 
-        Lend(payable(_lendingContract)).payInterest(_epoch, address(this), _lpTokenId);
+        Lend lend = Lend(payable(controller.lender()));
+        require(controller.accreditedAddresses(_spotPool), "Not an accredited pool");
+        uint256 amount = lend.getInterestPayment(_spotPool, _addresses, _lpTokenIds);
+        Vault(_spotPool).token().transferFrom(msg.sender, address(this), amount);
+        Vault(_spotPool).token().approve(address(lend), amount);
+        lend.payInterest(_spotPool, _addresses, _lpTokenIds);
+        emit InterestPaid(msg.sender, _lpTokenIds);
     }
 
     function repay(
-        address _lendingContract,
+        address _spotPool,
         address _sudoPool,
-        uint256 _lpTokenId,
-        uint256 _amount
-    ) external poolOwnedByContract(_sudoPool) {
-        require(msg.sender == pairing[_sudoPool].owner, "Not pool owner!");
-        // Basic repay transitory
-        // Approve lending contract to take that amount
-        (,address spotPool,,,,uint256 interestEpoch) = Lend(payable(_lendingContract)).loans(address(this), _lpTokenId);
-        address currency = address(Vault(spotPool).token());
-        Vault vault = Vault(spotPool);
-        uint256 poolEpoch = (block.timestamp - vault.startTime()) / vault.epochLength();
-        uint256 finalInterestPayment;
-        if(poolEpoch == interestEpoch) {
-            finalInterestPayment = vault.interestRate() * vault.getPayoutPerReservation(poolEpoch) / 10_000 
-                        * vault.epochLength() / (52 weeks);
-        } else {
-            require(poolEpoch + 1 == interestEpoch, "Must pay outstanding interest");
+        address[] calldata _addresses,
+        uint256[] calldata _lpTokenIds,
+        uint256[] calldata _amounts
+    ) external poolOwnedByContract(_sudoPool) ownerCaller(_sudoPool) {
+        require(controller.accreditedAddresses(_spotPool), "Not an accredited pool");
+        Lend lend = Lend(payable(controller.lender()));
+        Vault vault = Vault(_spotPool);
+        uint256 loansClosed;
+        uint256 totalPaymentAmount;
+        for(uint256 i = 0; i < _addresses.length; i++) {
+            uint256 _lpTokenId = _lpTokenIds[i];
+            uint256 _amount = _amounts[i];
+            (,,,,,uint256 interestEpoch) = lend.loans(address(this), _lpTokenId);
+            uint256 poolEpoch = (block.timestamp - vault.startTime()) / vault.epochLength();
+            uint256 finalInterestPayment;
+            if(poolEpoch == interestEpoch) {
+                finalInterestPayment = vault.interestRate() * vault.getPayoutPerReservation(poolEpoch) / 10_000 
+                            * vault.epochLength() / (52 weeks);
+            } else {
+                require(poolEpoch + 1 == interestEpoch, "Must pay outstanding interest");
+            }
+            if(lend.getLoanAmount(address(this), _lpTokenId) == 0) {
+                loansClosed++;
+                _burn(_lpTokenId);
+            }
+            totalPaymentAmount += _amount + finalInterestPayment;
         }
-        ERC20(currency).transferFrom(msg.sender, address(this), _amount + finalInterestPayment);
-        ERC20(currency).approve(_lendingContract, _amount + finalInterestPayment);
-        // Call repay
-        Lend(payable(_lendingContract)).repay(address(this), _lpTokenId, _amount);
-        (, spotPool,,,,) = Lend(payable(_lendingContract)).loans(address(this), _lpTokenId);
-        if(spotPool == address(0)) {
-            pairing[_sudoPool].amountActive--;
-            _burn(_lpTokenId);
-        }
+        Vault(_spotPool).token().transferFrom(msg.sender, address(this), totalPaymentAmount);
+        Vault(_spotPool).token().approve(address(lend), totalPaymentAmount);
+        lend.repay(_spotPool, _addresses, _lpTokenIds, _amounts);
+        pairing[_sudoPool].amountActive -= uint96(loansClosed);
         if(pairing[_sudoPool].amountActive == 0) {
             delete pairing[_sudoPool].price;
         }
+        emit Repaid(msg.sender, _lpTokenIds, _amounts);
     }
 
     function liquidateLp(
-        address _lendingContract,
-        uint256 _lpTokenId,
-        uint256[] calldata _epochs
+        address _spotPool,
+        address[] calldata _addresses,
+        uint256[] calldata _lpTokenIds,
+        uint256[] calldata _amounts
     ) external {
-        (, address spotPool,,,uint256 loanAmount,) = Lend(payable(_lendingContract)).loans(address(this), _lpTokenId);
-        Vault vault = Vault(payable(spotPool));
+        Lend lend = Lend(payable(controller.lender()));
+        Vault vault = Vault(payable(_spotPool));
         uint256 futurePayout = vault.getPayoutPerReservation(
             (block.timestamp - vault.startTime() + vault.epochLength() / 2) / vault.epochLength()
         );
-        uint256 outstandingInterest = Lend(payable(_lendingContract)).getInterestPayment(
-            _epochs[0:_epochs.length - 1], 
-            address(this), 
-            _lpTokenId
+        uint256 outstandingInterest = lend.getInterestPayment(
+            _spotPool,
+            _addresses, 
+            _lpTokenIds
         );
-        // contract checks borrow position on lending contract 
-            // if within LP liquidation window + base liquidation window, can liquidate
-            // else revert
-        // if liquidation goes through
-            // liquidator sends borrow currency to contract
-            // use currency to pay down debt + interest
-            // liquidator gains control of the NFT or underlying spot price value 
-        if(loanAmount > futurePayout) {
-
-            vault.token().transferFrom(
-                msg.sender,
-                address(this),
-                loanAmount + outstandingInterest
+        uint256 totalRepaymentAmount = lend.getRepaymentAmount(
+            _spotPool,
+            _addresses,
+            _lpTokenIds,
+            _amounts
+        );
+        vault.token().transferFrom(
+            msg.sender,
+            address(this),
+            totalRepaymentAmount + outstandingInterest
+        );
+        vault.token().approve(address(lend), outstandingInterest);
+        lend.payInterest(_spotPool, _addresses, _lpTokenIds);
+        vault.token().approve(address(lend), totalRepaymentAmount);
+        lend.repay(_spotPool, _addresses, _lpTokenIds, _amounts);
+        for(uint256 i = 0; i < _addresses.length; i++) {
+            require(
+                lend.getLoanAmount(address(this), _lpTokenIds[i]) > futurePayout
+                , "Liquidation failed"
             );
-            vault.token().approve(_lendingContract, outstandingInterest);
-            // Call pay interest 
-            Lend(payable(_lendingContract)).payInterest(
-                _epochs[0:_epochs.length - 1],
-                address(this),
-                _lpTokenId
-            );
-            outstandingInterest = Lend(payable(_lendingContract)).getInterestPayment(
-                _epochs[_epochs.length - 1:],
-                address(this),
-                _lpTokenId
-            );
-            vault.token().approve(_lendingContract, loanAmount + outstandingInterest);
-            // Call repay
-            Lend(payable(_lendingContract)).repay(
-                address(this),
-                _lpTokenId,
-                loanAmount
-            );
-            _transfer(address(this), msg.sender, _lpTokenId);
-        } else {
-            revert("Liquidation failed");
+            _transfer(address(this), msg.sender, _lpTokenIds[i]);
         }
+        emit Liquidated(msg.sender, _lpTokenIds);
     }
 
-    function exchangeLPforNFT(uint256[] calldata tokenId, uint256 _lpTokenId) external {
-        address _sudoPool = nftLocation[_lpTokenId];
-        address _lendingContract = lendingLocation[_lpTokenId];
-        address _currentOwnerOfLP = ownerOf(_lpTokenId);
-        require(ownerOf(_lpTokenId) != _lendingContract, "Can't call this if the owner is the lending contract!");
-        require(collection.ownerOf(tokenId[0]) == _sudoPool, "Chosen NFT not in sudo pool");
-        pairing[_sudoPool].amountActive--;
-        _burn(_lpTokenId);
+    function exchangeLPforNFT(address _sudoPool, uint256[] calldata _tokenIds, uint256[] calldata _lpTokenIds) external {
+        LSSVMPair(_sudoPool).withdrawERC721(collection, _tokenIds);
+        for(uint256 i = 0; i < _lpTokenIds.length; i++) {
+            uint256 _lpTokenId = _lpTokenIds[i];
+            uint256 _tokenId = _tokenIds[i];
+            require(
+                nftLocation[_lpTokenId] == _sudoPool
+                , "LP token not connected to sudo pool"
+            );
+            address _currentOwnerOfLP = ownerOf(_lpTokenId);
+            require(
+                ownerOf(_lpTokenId) != controller.lender()
+                , "Can't call this if the owner is the lending contract!"
+            );
+            require(
+                collection.ownerOf(_tokenId) == _sudoPool
+                , "Chosen NFT not in sudo pool"
+            );
+            pairing[_sudoPool].amountActive--;
+            _burn(_lpTokenId);
+            if(pairing[_sudoPool].amountActive == 0) {
+                delete pairing[_sudoPool].price;
+            }
+            collection.transferFrom(
+                address(this), 
+                _currentOwnerOfLP, 
+                _tokenId
+            );
+        }
+        emit LPForNFT(msg.sender, _lpTokenIds);
+    }
+
+    function exchangeLPforETH(address _sudoPool, address _owner, uint256[] calldata _lpTokenIds) external payable {
+        uint256 totalWithdrawalAmount;
+        for(uint256 i = 0; i < _lpTokenIds.length; i++) {
+            uint256 _lpTokenId = _lpTokenIds[i];
+            require(
+                nftLocation[_lpTokenId] == _sudoPool
+                , "LP token not connected to sudo pool"
+            );
+            require(
+                ownerOf(_lpTokenId) == _owner
+                , "Incorrect owner input!"
+            );
+            require(
+                ownerOf(_lpTokenId) != controller.lender()
+                , "Can't call this if the owner is the lending contract!"
+            );
+            require(
+                collection.balanceOf(_sudoPool) == 0
+                , "Can only claim ETH if there are no NFTs in the pool"
+            );
+            totalWithdrawalAmount += pairing[_sudoPool].price;
+            _burn(_lpTokenId);
+        }
+        pairing[_sudoPool].amountActive -= uint96(_lpTokenIds.length);
         if(pairing[_sudoPool].amountActive == 0) {
             delete pairing[_sudoPool].price;
         }
-        LSSVMPair(_sudoPool).withdrawERC721(collection, tokenId);
-        collection.transferFrom(
-            address(this), 
-            _currentOwnerOfLP, 
-            tokenId[0]
-        );
-    }
-
-    function exchangeLPforETH(uint256 _lpTokenId) external payable {
-        address _sudoPool = nftLocation[_lpTokenId];
-        address _lendingContract = lendingLocation[_lpTokenId];
-        address _currentOwnerOfLP = ownerOf(_lpTokenId);
-        require(ownerOf(_lpTokenId) != _lendingContract, "Can't call this if the owner is the lending contract!");
-        require(collection.balanceOf(_sudoPool) == 0, "Can only claim ETH if there are no NFTs in the pool");
-        uint256 ETHpayout = pairing[_sudoPool].price;
-        pairing[_sudoPool].amountActive--;
-        _burn(_lpTokenId);
-        if(pairing[_sudoPool].amountActive == 0) {
-            delete pairing[_sudoPool].price;
-        }
-        LSSVMPairETH(payable(_sudoPool)).withdrawETH(ETHpayout);
-        payable(_currentOwnerOfLP).transfer(ETHpayout);
+        LSSVMPairETH(payable(_sudoPool)).withdrawETH(totalWithdrawalAmount);
+        payable(_owner).transfer(totalWithdrawalAmount);
     }
 
     function onERC721Received(
@@ -307,5 +312,63 @@ contract SudoNft is ERC721 {
             require(msg.sender == owner);    
         }
         LSSVMPair(_sudoPool).transferOwnership(owner);
+    }
+
+    // ============ Internal Functions ============ //
+    function _findCurrentPrice(
+        address _sudoPool
+    ) internal returns(uint256 currentPrice) {
+        Pairing storage _pairing = pairing[_sudoPool];
+        if(_pairing.price == 0) {
+            (,,, currentPrice,) = LSSVMPair(_sudoPool).getBuyNFTQuote(1);
+            _pairing.price = uint128(currentPrice);
+            _pairing.active = true;
+        } else {
+            currentPrice = _pairing.price;
+        }
+        require(
+            currentPrice < 2**128-1
+            , "Price too high!"
+        );
+    }
+
+    function _checkLPIds(
+        address _user,
+        address _sudoPool,
+        uint256 _currentPrice,
+        uint256[] calldata _lpTokenIds,
+        uint256[] calldata _amounts
+    ) internal returns(uint256 totalBorrowAmount, uint256 newLoans) {
+        Pairing storage _pairing = pairing[_sudoPool];
+        for(uint256 i = 0; i < _lpTokenIds.length; i++) {
+            uint256 _lpTokenId = _lpTokenIds[i];
+            uint256 _amount = _amounts[i];
+            require(
+                _lpTokenId < totalSupply
+                , "Improper token id input"
+            );
+            if(!_exists(_lpTokenId)) {
+                _mint(address(this), _lpTokenId);
+                newLoans++;
+                nftLocation[_lpTokenId] = _sudoPool;
+            } else {
+                require(
+                    borrower[_lpTokenId] == _user
+                    , "No soup for you!"
+                );
+            }
+            require(
+                _currentPrice >= 110 * (
+                    _amount + Lend(payable(controller.lender())).getLoanAmount(address(this), _lpTokenId)
+                ) / 100
+                , "Listing price must be 10% greater than borrow amount"
+            );
+            totalBorrowAmount += _amount;
+        }
+        _pairing.amountActive += uint96(newLoans);
+        require(
+            collection.balanceOf(_sudoPool) >= _pairing.amountActive
+            , "Not enough NFTs in the sudo pool to allow this!"
+        );
     }
 }
