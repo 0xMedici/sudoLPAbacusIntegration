@@ -13,12 +13,12 @@ async function main() {
     // ------- CONNECT CONTRACTS -------- // 
     //Controller connect
     AbacusController = await ethers.getContractFactory("AbacusController");
-    controller = await AbacusController.attach("0xE0818eaC6870d10923417D581477e253A154f588");
+    controller = await AbacusController.attach("0x3fFCf56c28ED161281E6555291A509bEDd0E8BaB");
     console.log("Controller:", controller.address);
 
     //Sudo pool connect
     LSSVMPairEnumerableETH = await ethers.getContractFactory("LSSVMPairEnumerableETH");
-    pair = await LSSVMPairEnumerableETH.attach("0x0c5A460fae4b116176D055ADa0EFb73Ab4D7CeaA");
+    pair = await LSSVMPairEnumerableETH.attach("0x0189A3F38ce22543E77985D5e907c646f0b157d1");
     console.log("Pair:", pair.address);
 
     //Proof checker
@@ -26,21 +26,23 @@ async function main() {
     check = await ProofCheck.attach("0x8Fd6b316FdAA43cA6e6a70d6694cEC37Ca60875d");
     console.log("ProofCheck:", check.address);
 
-    //SudoNFT connect
-    SudoNft = await ethers.getContractFactory("SudoNft");
-    // sudoNft = await SudoNft.deploy(
+    NftFactory = await ethers.getContractFactory("NftFactory");
+    // nftFactory = await NftFactory.deploy(
     //     deployer.address,
     //     controller.address,
-    //     '0xF0202E9267930aE942F0667dC6d805057328F6dC' // sudo factory address
-    //     , '0x8971718bca2b7fc86649b84601b17b634ecbdf19' // nft collection address 
-    //     , 1000 // total token supply
+    //     "0xF0202E9267930aE942F0667dC6d805057328F6dC"
     // );
-    sudoNft = await SudoNft.attach('0x3dB0Cc31B8C84B4cDb0376B19928Bbd238fbEf71');
+    nftFactory = await NftFactory.attach("0x9204d863EC21eaF292AB3872a0A72aF164087100");
+    console.log("NFT factory:", nftFactory.address);
+
+    //SudoNFT connect
+    SudoNft = await ethers.getContractFactory("SudoNft");
+    sudoNft = await SudoNft.attach('0x2204201858bcDABC75dF711F742A4DD1125B2043');
     console.log("Sudo NFT:", sudoNft.address);
     
     //Lend connect
     Lend = await ethers.getContractFactory("Lend");
-    lend = await Lend.attach("0xABb42c7FCCe3cFd3807137204d6B193B1eC21A5B");
+    lend = await Lend.attach("0xd735f90E6d6707A09c7587574B4266C79cdb9f3d");
 
     //NFT connect
     ERC721 = await ethers.getContractFactory("ERC721");
@@ -58,43 +60,62 @@ async function main() {
 
     //Vault connect
     Factory = await ethers.getContractFactory("Factory");
-    factory = await Factory.attach("0x62FeB9D75824BA9c3b0100E8865EBA74a0340c12");
+    factory = await Factory.attach("0xE63fA886Aab5d84A1e46a89E4248f7bFEd576530");
     Vault = await ethers.getContractFactory("Vault");
     // const initiate = await factory.initiateMultiAssetVault(
-    //     "SudoLPTest6"
+    //     "SudoLPTest1"
     // );
     // initiate.wait();
-    let vaultAddress = await factory.getPoolAddress("SudoLPTest6");
-    let maPool = await Vault.attach(vaultAddress);
-    console.log("Pool address:", maPool.address);
+    // let vaultAddress = await factory.getPoolAddress("SudoLPTest1");
+    // let maPool = await Vault.attach(vaultAddress);
+    // console.log("Pool address:", maPool.address);
     console.log("Pair owner:", await pair.owner());
-    console.log("Amount of collect:", (await maPool.collectionAmount()).toString());
-    console.log("NFTs in pair pool:", (await erc721.balanceOf(pair.address)).toString());
-    let poolStartTime = await maPool.startTime();
-    console.log("Start time:", poolStartTime);
-    let currentEpoch = Math.floor(
-        (Date.now() / 1000 - poolStartTime)
-        / parseInt(await maPool.epochLength())
-    );
-    let futureEpoch = Math.floor(
-        (Date.now() / 1000 - poolStartTime + await maPool.epochLength() / 2) 
-        / parseInt(await maPool.epochLength())
-    );
-    console.log(
-        "Current payout:", currentEpoch, parseInt(await maPool.getPayoutPerReservation(currentEpoch)) 
-    );
-    console.log(
-        "Future payout:", futureEpoch, parseInt(await maPool.getPayoutPerReservation(futureEpoch)) 
-    );
-    console.log(
-        "Current + 1 payout:", currentEpoch + 1, parseInt(await maPool.getPayoutPerReservation(currentEpoch + 1)) 
-    );
-    console.log(await erc721.ownerOf(94));
+    // console.log("Amount of collect:", (await maPool.collectionAmount()).toString());
+    // console.log("NFTs in pair pool:", (await erc721.balanceOf(pair.address)).toString());
+    // let poolStartTime = await maPool.startTime();
+    // console.log("Start time:", poolStartTime);
+    // let currentEpoch = Math.floor(
+    //     (Date.now() / 1000 - poolStartTime)
+    //     / parseInt(await maPool.epochLength())
+    // );
+    // let futureEpoch = Math.floor(
+    //     (Date.now() / 1000 - poolStartTime + await maPool.epochLength() / 2) 
+    //     / parseInt(await maPool.epochLength())
+    // );
+    // console.log(
+    //     "Current payout:", currentEpoch, parseInt(await maPool.getPayoutPerReservation(currentEpoch)) 
+    // );
+    // console.log(
+    //     "Future payout:", futureEpoch, parseInt(await maPool.getPayoutPerReservation(futureEpoch)) 
+    // );
+    // console.log(
+    //     "Current + 1 payout:", currentEpoch + 1, parseInt(await maPool.getPayoutPerReservation(currentEpoch + 1)) 
+    // );
+    console.log(await erc721.ownerOf(36));
     // console.log(await sudoNft.ownerOf(9));
     // console.log(await lend.loans(sudoNft.address, 9));
     // console.log(await sudoNft.pairing(pair.address));
 
     // ------- EXECUTE FUNCTIONS -------- //
+
+    //WL SudoNFT creator
+    // const wlCreator = await nftFactory.whitelistCreator(
+    //     [
+    //         deployer.address,
+    //         "0xE6dC2c1a17b093F4f236Fe8545aCb9D5Ad94334a"
+    //     ]
+    // );
+    // wlCreator.wait();
+    // console.log("WL Done");
+
+    //Create SudoNFT
+    // const createSudoNFT = await nftFactory.createSudoNFT(
+    //     "0x8971718bca2b7fc86649b84601b17b634ecbdf19",
+    //     10000
+    // );
+    // createSudoNFT.wait();
+    // console.log("Sudo NFT deployed");
+    // console.log("SudoNFT:", await nftFactory.sudoNfts("0x8971718bca2b7fc86649b84601b17b634ecbdf19"));
 
     // Include NFTs in pool
     // let nftIds = new Array();
@@ -123,7 +144,7 @@ async function main() {
     // include.wait();
 
     // Begin pool
-    // const begin = await maPool.begin(3, 100, 100, 180, token.address, 100, 10, 3600, 1200);
+    // const begin = await maPool.begin(3, 100, 100, 86400, token.address, 100, 10, 3600, 1200);
     // begin.wait();
 
     // Deposit liquidity
@@ -138,7 +159,7 @@ async function main() {
     //         '300', '300', '300','300', '300','300', '300', '300'
     //     ],
     //     currentEpoch,
-    //     currentEpoch + 2,
+    //     currentEpoch + 5,
     // );
     // purchase.wait();
     // console.log("Purchase succesful");
@@ -154,7 +175,8 @@ async function main() {
 
     // Transfer ownership from
     // const transferOwnership = await pair.transferOwnership(
-    //     sudoNft.address
+    //     "0xE6dC2c1a17b093F4f236Fe8545aCb9D5Ad94334a"
+    //     // sudoNft.address
     // );
     // transferOwnership.wait();
     // console.log("Ownership transferred!");
@@ -166,7 +188,7 @@ async function main() {
     // callTransferOwnership.wait();
 
     //Deposit NFTs
-    // const transferNFT = await erc721.transferFrom(deployer.address, pair.address, 94);
+    // const transferNFT = await erc721.transferFrom(deployer.address, pair.address, 36);
     // transferNFT.wait();
     // console.log("NFT transferred!");
 
