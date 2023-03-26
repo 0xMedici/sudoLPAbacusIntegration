@@ -188,6 +188,7 @@ contract SudoNft is ERC721 {
     ) external authenticPool(_spotPool) {
         for(uint256 i = 0; i < _lpTokenIds.length; i++) {
             require(borrower[_lpTokenIds[i]] == msg.sender);
+            require(_addresses[i] == address(this));
         }
         Lend lend = Lend(payable(controller.lender()));
         uint256 amount = lend.getInterestPayment(_spotPool, _addresses, _lpTokenIds);

@@ -13,12 +13,12 @@ async function main() {
     // ------- CONNECT CONTRACTS -------- // 
     //Controller connect
     AbacusController = await ethers.getContractFactory("AbacusController");
-    controller = await AbacusController.attach("0x3fFCf56c28ED161281E6555291A509bEDd0E8BaB");
+    controller = await AbacusController.attach("0x1f0c1eB88319512DEc9d0229591108E16ea6F6C3");
     console.log("Controller:", controller.address);
 
     //Sudo pool connect
     LSSVMPairMissingEnumerableETH = await ethers.getContractFactory("LSSVMPairMissingEnumerableETH");
-    pair = await LSSVMPairMissingEnumerableETH.attach("0x7102431288E4Ca470eeb40b610cD2f934Ec37f65");
+    pair = await LSSVMPairMissingEnumerableETH.attach("0x59D4626819b7Fa6BB82f4793c71B16dE2218CF7c");
     console.log("Pair:", pair.address);
 
     //Proof checker
@@ -32,17 +32,17 @@ async function main() {
     //     controller.address,
     //     "0xF0202E9267930aE942F0667dC6d805057328F6dC"
     // );
-    nftFactory = await NftFactory.attach("0x90e240A3F80e0B1e8D906B7d6Af16814Ef88222C");
+    nftFactory = await NftFactory.attach("0x2d7a82b9fA4C4d22aACb3e820c398A45Fcf3D4B5");
     console.log("NFT factory:", nftFactory.address);
 
     //SudoNFT connect
     SudoNft = await ethers.getContractFactory("SudoNft");
-    sudoNft = await SudoNft.attach('0x11d4f562422eB4Fd779CCb3AaC1D6E3cF633795c');
+    sudoNft = await SudoNft.attach('0x019694Cc0983b9B9E2cc880C4c3296D2D01fdF74');
     console.log("Sudo NFT:", sudoNft.address);
     
     //Lend connect
     Lend = await ethers.getContractFactory("Lend");
-    lend = await Lend.attach("0xd735f90E6d6707A09c7587574B4266C79cdb9f3d");
+    lend = await Lend.attach("0xc367eC25a04fe11172E566fD09621EE7A27106ea");
 
     //NFT connect
     ERC721 = await ethers.getContractFactory("ERC721");
@@ -60,39 +60,39 @@ async function main() {
 
     //Vault connect
     Factory = await ethers.getContractFactory("Factory");
-    factory = await Factory.attach("0xE63fA886Aab5d84A1e46a89E4248f7bFEd576530");
+    factory = await Factory.attach("0x29E721533b608A2BBE823E3521F4B7E15fE0Dfe3");
     Vault = await ethers.getContractFactory("Vault");
     // const initiate = await factory.initiateMultiAssetVault(
-    //     "SudoLPTest4"
+    //     "SudoLPTest1"
     // );
     // initiate.wait();
-    let vaultAddress = await factory.getPoolAddress("SudoLPTest4");
+    let vaultAddress = await factory.getPoolAddress("SudoLPTest1");
     let maPool = await Vault.attach(vaultAddress);
     console.log("Pool address:", maPool.address);
-    console.log("Pair owner:", await pair.owner());
-    console.log("Amount of collect:", (await maPool.collectionAmount()).toString());
-    console.log("NFTs in pair pool:", (await erc721.balanceOf(pair.address)).toString());
-    let poolStartTime = await maPool.startTime();
-    console.log("Start time:", poolStartTime);
-    let currentEpoch = Math.floor(
-        (Date.now() / 1000 - poolStartTime)
-        / parseInt(await maPool.epochLength())
-    );
-    let futureEpoch = Math.floor(
-        (Date.now() / 1000 - poolStartTime + await maPool.epochLength() / 2) 
-        / parseInt(await maPool.epochLength())
-    );
-    console.log(
-        "Current payout:", currentEpoch, parseInt(await maPool.getPayoutPerReservation(currentEpoch)) 
-    );
-    console.log(
-        "Future payout:", futureEpoch, parseInt(await maPool.getPayoutPerReservation(futureEpoch)) 
-    );
-    console.log(
-        "Current + 1 payout:", currentEpoch + 1, parseInt(await maPool.getPayoutPerReservation(currentEpoch + 1)) 
-    );
+    // console.log("Pair owner:", await pair.owner());
+    // console.log("Amount of collect:", (await maPool.collectionAmount()).toString());
+    // console.log("NFTs in pair pool:", (await erc721.balanceOf(pair.address)).toString());
+    // let poolStartTime = await maPool.startTime();
+    // console.log("Start time:", poolStartTime);
+    // let currentEpoch = Math.floor(
+    //     (Date.now() / 1000 - poolStartTime)
+    //     / parseInt(await maPool.epochLength())
+    // );
+    // let futureEpoch = Math.floor(
+    //     (Date.now() / 1000 - poolStartTime + await maPool.epochLength() / 2) 
+    //     / parseInt(await maPool.epochLength())
+    // );
+    // console.log(
+    //     "Current payout:", currentEpoch, parseInt(await maPool.getPayoutPerReservation(currentEpoch)) 
+    // );
+    // console.log(
+    //     "Future payout:", futureEpoch, parseInt(await maPool.getPayoutPerReservation(futureEpoch)) 
+    // );
+    // console.log(
+    //     "Current + 1 payout:", currentEpoch + 1, parseInt(await maPool.getPayoutPerReservation(currentEpoch + 1)) 
+    // );
     console.log(await erc721.ownerOf(862));
-    console.log(await sudoNft.ownerOf(3));
+    // console.log(await sudoNft.ownerOf(3));
     // console.log(await lend.loans(sudoNft.address, 9));
     // console.log(await sudoNft.pairing(pair.address));
 
@@ -146,8 +146,8 @@ async function main() {
     // include.wait();
 
     // Begin pool
-    // const begin = await maPool.begin(3, 100, 100, 86400, token.address, 100, 10, 3600, 1200);
-    // begin.wait();
+    const begin = await maPool.begin(3, 100, 100, 86400, token.address, 100, 10, 3600, 1200);
+    begin.wait();
 
     // Deposit liquidity
     // const approveToken = await token.approve(maPool.address, (1e15 * 5000).toString());
@@ -171,7 +171,7 @@ async function main() {
     // sell.wait();
 
     //Deposit NFTs
-    // const transferNFT = await erc721.transferFrom(deployer.address, pair.address, 862);
+    // const transferNFT = await erc721.transferFrom(deployer.address, pair.address, 863);
     // transferNFT.wait();
     // console.log("NFT transferred!");
     
@@ -182,8 +182,8 @@ async function main() {
 
     // Transfer ownership from
     // const transferOwnership = await pair.transferOwnership(
-    //     // "0xE6dC2c1a17b093F4f236Fe8545aCb9D5Ad94334a"
-    //     sudoNft.address
+    //     "0xE6dC2c1a17b093F4f236Fe8545aCb9D5Ad94334a"
+    //     // sudoNft.address
     // );
     // transferOwnership.wait();
     // console.log("Ownership transferred!");
