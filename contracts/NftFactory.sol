@@ -39,6 +39,10 @@ contract NftFactory {
             whitelistedCreators[msg.sender]
             , "Not whitelisted"
         );
+        require(
+            sudoNfts[_collection] == address(0)
+            , "Collection already has pool"
+        );
         SudoNft sudoNft = new SudoNft(
             admin,
             abacusController,

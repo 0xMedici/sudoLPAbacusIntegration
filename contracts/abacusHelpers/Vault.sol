@@ -252,6 +252,7 @@ contract Vault is ReentrancyGuard, ReentrancyGuard2, Initializable {
     ) external {
         require(stage == Stage.INCLUDED_NFT);
         require(_token != address(0));
+        require(startTime == 0);
         require(
             _epochLength >= 1 days
             && _epochLength <= 2 weeks
@@ -350,16 +351,16 @@ contract Vault is ReentrancyGuard, ReentrancyGuard2, Initializable {
         require(
             startEpoch == (block.timestamp - startTime) / epochLength
             || startEpoch == (block.timestamp - startTime) / epochLength + 1
-            , "IT"
+            // , "IT"
         );
         console.log((block.timestamp - startTime) / epochLength);
         require(
             finalEpoch - startEpoch > 1
-            , "TS"
+            // , "TS"
         );
         require(
             finalEpoch - startEpoch <= 10
-            , "TL"
+            // , "TL"
         );
         uint256 totalTokensRequested;
         uint256 largestTicket;
@@ -414,21 +415,21 @@ contract Vault is ReentrancyGuard, ReentrancyGuard2, Initializable {
         Buyer storage trader = traderProfile[msg.sender][_nonce];
         require(
             trader.active
-            , "PC"
+            // , "PC"
         );
         require(
             adjustmentsMade[msg.sender][_nonce] == adjustmentsRequired
-            , "ANM"
+            // , "ANM"
         );
         require(
             trader.unlockEpoch != 0
-            , "PNE"
+            // , "PNE"
         );
         uint256 poolEpoch = (block.timestamp - startTime) / epochLength;
         // console.log(poolEpoch, trader.startEpoch);
         require(
             trader.startEpoch <= poolEpoch
-            , "EPCBS"
+            // , "EPCBS"
         );
         uint256 finalEpoch;
         if(poolEpoch >= trader.unlockEpoch) {
@@ -436,7 +437,7 @@ contract Vault is ReentrancyGuard, ReentrancyGuard2, Initializable {
         } else {
             require(
                 reservations == 0
-                , "USPE"
+                // , "USPE"
             );
             finalEpoch = poolEpoch;
         }

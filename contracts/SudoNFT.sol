@@ -149,7 +149,7 @@ contract SudoNft is ERC721 {
             {
                 _checkBorrowReqs(msg.sender, _sudoPool);
                 uint256 _endIndex = _sudoPools[i] & 95;
-                totalBorrowAmount += _checkIDWrapper(
+                _checkIDWrapper(
                     _spotPool,
                     _sudoPool,
                     _lpTokenIds[prevIndex : _endIndex],
@@ -164,7 +164,7 @@ contract SudoNft is ERC721 {
             for(uint256 j = 0; j < _lpTokenIds.length; j++) {
                 _addresses[j] = address(this);
             }
-            Lend(payable(controller.lender())).borrow(
+            totalBorrowAmount += Lend(payable(controller.lender())).borrow(
                 _spotPool,
                 _merkleProofs,
                 _addresses,
@@ -183,12 +183,13 @@ contract SudoNft is ERC721 {
 
     function payInterest(
         address _spotPool,
-        address[] calldata _addresses,
         uint256[] calldata _lpTokenIds
     ) external authenticPool(_spotPool) {
+        address[] memory _addresses = new address[](_lpTokenIds.length);
+        require(_lpTokenIds.length != 0);
         for(uint256 i = 0; i < _lpTokenIds.length; i++) {
             require(borrower[_lpTokenIds[i]] == msg.sender);
-            require(_addresses[i] == address(this));
+            _addresses[i] = address(this);
         }
         Lend lend = Lend(payable(controller.lender()));
         uint256 amount = lend.getInterestPayment(_spotPool, _addresses, _lpTokenIds);
@@ -208,35 +209,20 @@ contract SudoNft is ERC721 {
         Vault vault = Vault(_spotPool);
         uint256 loansClosed;
         uint256 totalPaymentAmount;
-        for(uint256 i = 0; i < _lpTokenIds.length; i++) {
-            uint256 _lpTokenId = _lpTokenIds[i];
-            uint256 _amount = _amounts[i];
-            require(borrower[_lpTokenId] == msg.sender);
-            (,,,,,uint256 interestEpoch) = lend.loans(address(this), _lpTokenId);
-            uint256 poolEpoch = (block.timestamp - vault.startTime()) / vault.epochLength();
-            uint256 finalInterestPayment;
-            if(poolEpoch == interestEpoch) {
-                finalInterestPayment = vault.interestRate() * vault.getPayoutPerReservation(poolEpoch) / 10_000 
-                            * vault.epochLength() / (52 weeks);
-            } else {
-                require(
-                    poolEpoch + 1 == interestEpoch
-                    // , "K"
-                );
-            }
-            totalPaymentAmount += _amount + finalInterestPayment;
-        }
-        vault.token().transferFrom(msg.sender, address(this), totalPaymentAmount);
-        vault.token().approve(address(lend), totalPaymentAmount);
         {
             address[] memory _addresses = new address[](_lpTokenIds.length);
             for(uint256 j = 0; j < _lpTokenIds.length; j++) {
                 _addresses[j] = address(this);
             }
-            lend.repay(_spotPool, _addresses, _lpTokenIds, _amounts);    
+            totalPaymentAmount += lend.getInterestPayment(_spotPool, _addresses, _lpTokenIds);
+            totalPaymentAmount += lend.getRepaymentAmount(_spotPool, _addresses, _lpTokenIds, _amounts);
+            vault.token().transferFrom(msg.sender, address(this), totalPaymentAmount);
+            vault.token().approve(address(lend), totalPaymentAmount);
+            lend.repay(_spotPool, _addresses, _lpTokenIds, _amounts);
         }
         for(uint256 i = 0; i < _lpTokenIds.length; i++) {
             uint256 _lpTokenId = _lpTokenIds[i];
+            require(borrower[_lpTokenId] == msg.sender);
             if(lend.getLoanAmount(address(this), _lpTokenId) == 0) {
                 loansClosed++;
                 _burn(_lpTokenId);
@@ -251,7 +237,6 @@ contract SudoNft is ERC721 {
 
     function liquidateLp(
         address _spotPool,
-        address[] calldata _addresses,
         uint256[] calldata _lpTokenIds,
         uint256[] calldata _amounts
     ) external {
@@ -260,39 +245,31 @@ contract SudoNft is ERC721 {
         uint256 futurePayout = vault.getPayoutPerReservation(
             (block.timestamp - vault.startTime() + vault.epochLength() / 2) / vault.epochLength()
         );
-        uint256 outstandingInterest = lend.getInterestPayment(
-            _spotPool,
-            _addresses, 
-            _lpTokenIds
-        );
-        vault.token().transferFrom(
-            msg.sender,
-            address(this),
-            outstandingInterest
-        );
-        vault.token().approve(address(lend), outstandingInterest);
-        lend.payInterest(_spotPool, _addresses, _lpTokenIds);
-        uint256 totalRepaymentAmount = lend.getRepaymentAmount(
-            _spotPool,
-            _addresses,
-            _lpTokenIds,
-            _amounts
-        );
-        vault.token().transferFrom(
-            msg.sender,
-            address(this),
-            totalRepaymentAmount
-        );
-        for(uint256 i = 0; i < _addresses.length; i++) {
+        for(uint256 i = 0; i < _lpTokenIds.length; i++) {
             require(
                 lend.getLoanAmount(address(this), _lpTokenIds[i]) > futurePayout
                 // , "L"
             );
         }
-        vault.token().approve(address(lend), totalRepaymentAmount);
-        lend.repay(_spotPool, _addresses, _lpTokenIds, _amounts);
-        for(uint256 i = 0; i < _addresses.length; i++) {
-            _transfer(address(this), msg.sender, _lpTokenIds[i]);
+        uint256 totalPaymentAmount;
+        {
+            address[] memory _addresses = new address[](_lpTokenIds.length);
+            for(uint256 j = 0; j < _lpTokenIds.length; j++) {
+                _addresses[j] = address(this);
+            }
+            totalPaymentAmount += lend.getInterestPayment(_spotPool, _addresses, _lpTokenIds);
+            totalPaymentAmount += lend.getRepaymentAmount(_spotPool, _addresses, _lpTokenIds, _amounts);
+            vault.token().transferFrom(msg.sender, address(this), totalPaymentAmount);
+            vault.token().approve(address(lend), totalPaymentAmount);
+            lend.repay(_spotPool, _addresses, _lpTokenIds, _amounts);
+        }
+        for(uint256 i = 0; i < _lpTokenIds.length; i++) {
+            uint256 _lpTokenId = _lpTokenIds[i];
+            delete borrower[_lpTokenId];
+            _burn(_lpTokenId);
+            _mint(msg.sender, _lpTokenId + totalSupply);
+            nftLocation[_lpTokenId + totalSupply] = nftLocation[_lpTokenId];
+            delete nftLocation[_lpTokenId];
         }
         emit Liquidated(msg.sender, _lpTokenIds);
     }
@@ -311,6 +288,7 @@ contract SudoNft is ERC721 {
                 ownerOf(_lpTokenId) != controller.lender()
                 // , "N"
             );
+            delete nftLocation[_lpTokenId];
             _burn(_lpTokenId);
             if(pairing[_sudoPool].amountActive == 0) {
                 delete pairing[_sudoPool].price;
@@ -338,7 +316,7 @@ contract SudoNft is ERC721 {
                 // , "P"
             );
             require(
-                ownerOf(_lpTokenId) != controller.lender()
+                _owner != controller.lender()
                 // , "Q"
             );
             require(
@@ -346,6 +324,7 @@ contract SudoNft is ERC721 {
                 // , "R"
             );
             totalWithdrawalAmount += pairing[_sudoPool].price - 5 * pairing[_sudoPool].price / 1000;
+            delete nftLocation[_lpTokenId];
             _burn(_lpTokenId);
         }
         pairing[_sudoPool].amountActive -= uint96(_lpTokenIds.length);
@@ -428,16 +407,15 @@ contract SudoNft is ERC721 {
         address _sudoPool,
         uint256[] calldata _lpTokenIds,
         uint256[] calldata _amounts
-    ) internal returns(uint256 totalBorrowAmount) {
+    ) internal {
         emit Borrowed(msg.sender, _spotPool, _sudoPool, _lpTokenIds, _amounts);
-        (uint256 borrowAmount, ) = _checkLPIds(
+        _checkLPIds(
             msg.sender,
             _sudoPool,
             _findCurrentPrice(_sudoPool),
             _lpTokenIds,
             _amounts
         );
-        totalBorrowAmount += borrowAmount;
     }
 
     function _checkLPIds(
@@ -446,7 +424,7 @@ contract SudoNft is ERC721 {
         uint256 _currentPrice,
         uint256[] calldata _lpTokenIds,
         uint256[] calldata _amounts
-    ) internal returns(uint256 totalBorrowAmount, uint256 newLoans) {
+    ) internal returns(uint256 newLoans) {
         Pairing storage _pairing = pairing[_sudoPool];
         for(uint256 i = 0; i < _lpTokenIds.length; i++) {
             uint256 _lpTokenId = _lpTokenIds[i];
@@ -472,7 +450,6 @@ contract SudoNft is ERC721 {
                 ) / 100
                 // , "Z"
             );
-            totalBorrowAmount += _amount;
         }
         _pairing.amountActive += uint96(newLoans);
         require(
