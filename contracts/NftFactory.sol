@@ -20,12 +20,15 @@ contract NftFactory {
         address _factoryAddress
     ) {
         admin = _admin;
-        sudoFactoryAddress = _factoryAddress;
         abacusController = _controller;
+        sudoFactoryAddress = _factoryAddress;
     }
 
     function whitelistCreator(address[] calldata _user) external {
-        require(msg.sender == admin, "Not admin");
+        require(
+            msg.sender == admin
+            // , "Not admin"
+        );
         for(uint256 i = 0; i < _user.length; i++) {
             whitelistedCreators[_user[i]] = true;
         }
@@ -37,11 +40,11 @@ contract NftFactory {
     ) external {
         require(
             whitelistedCreators[msg.sender]
-            , "Not whitelisted"
+            // , "Not whitelisted"
         );
         require(
             sudoNfts[_collection] == address(0)
-            , "Collection already has pool"
+            // , "Collection already has pool"
         );
         SudoNft sudoNft = new SudoNft(
             admin,
